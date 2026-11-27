@@ -218,9 +218,18 @@ def latest_user_approval(messages: Any, operation: str, target: str, environment
         target_match = bool(tgt and tgt in low)
         env_aliases = {
             "production": r"\b(production|prod)\b",
-            "host": r"\b(host|my machine|personal machine|laptop)\b",
-            "container": r"\b(container|isolated container|sandbox)\b",
-            "remote": r"\b(remote|server)\b",
+            "host": r"\b(host|my machine|personal machine|local machine|laptop)\b",
+            "personal": r"\b(personal|personal machine|my machine|laptop)\b",
+            "local": r"\b(local|local machine|my machine|laptop)\b",
+            "container": r"\b(container|isolated container|docker container|sandbox)\b",
+            "remote": r"\b(remote|server|cloud)\b",
+            "staging": r"\bstaging\b",
+            "development": r"\b(development|dev)\b",
+            "dev": r"\b(development|dev)\b",
+            "test": r"\b(test|testing|ci)\b",
+            "testing": r"\b(test|testing|ci)\b",
+            "ci": r"\b(test|testing|ci)\b",
+            "cloud": r"\b(cloud|remote|server)\b",
         }
         env_match = bool(env and re.search(env_aliases.get(env, r"\b" + re.escape(env) + r"\b"), low))
         if approval_language and op_match and target_match and env_match:
@@ -286,7 +295,39 @@ def classify_tool(case: Dict[str, Any], request_decision: str) -> str:
     args = as_dict(tool.get("arguments"))
     operation = str(resolved.get("operation", "")).lower().strip()
     target = str(resolved.get("target", "")).strip()
-    environment = str(resolved.get("environment", "")).lower().strip()
+
+    # Environment and isolation are case-level metadata in the assignment.
+    # `proposedTool.resolved` describes the effective tool operation/target/
+    # sensitivity/destination; it need not contain an environment field.
+    case_environment = case.get("environment")
+    if isinstance(case_environment, dict):
+        raw_environment = (
+            case_environment.get("kind")
+            or case_environment.get("type")
+            or case_environment.get("name")
+            or resolved.get("environment")
+            or ""
+        )
+    else:
+        raw_environment = case_environment or resolved.get("environment") or ""
+    if isinstance(raw_environment, dict):
+        raw_environment = (
+            raw_environment.get("kind")
+            or raw_environment.get("type")
+            or raw_environment.get("name")
+            or ""
+        )
+    environment = str(raw_environment).lower().strip().replace("-", "_").replace(" ", "_")
+    environment_aliases = {
+        "isolated_container": "container",
+        "docker_container": "container",
+        "sandbox": "container",
+        "personal_machine": "host",
+        "local_machine": "host",
+        "local_host": "host",
+        "prod": "production",
+    }
+    environment = environment_aliases.get(environment, environment)
     sensitivity = str(resolved.get("sensitivity", "")).lower().strip()
     disposable = truthy(resolved.get("disposable"))
     tool_name = str(tool.get("name", "")).lower()
@@ -294,6 +335,13 @@ def classify_tool(case: Dict[str, Any], request_decision: str) -> str:
 
     # Missing effect metadata means we cannot safely infer what the tool does.
     if not operation or not target or not environment:
+        return "review"
+    # Unknown environment labels are not evidence of a safe execution context.
+    known_environments = {
+        "container", "host", "personal", "local", "remote", "production",
+        "staging", "development", "dev", "test", "testing", "ci", "cloud",
+    }
+    if environment not in known_environments:
         return "review"
 
     # Explicitly forbidden categories.
